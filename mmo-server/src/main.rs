@@ -50,7 +50,7 @@ impl Future for Server {
 }
 
 fn main() {
-    let addr = env::args().nth(1).unwrap_or("127.0.0.1:8080".to_string());
+    let addr = env::args().nth(1).unwrap_or("138.68.41.91:8080".to_string());
     let addr = addr.parse::<SocketAddr>().unwrap();
 
     // Create the event loop that will drive this server, and also bind the
