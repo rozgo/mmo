@@ -1,0 +1,6 @@
+[package]
+name = "mmo-client"
+version = "0.1.0"
+authors = ["Alex Rozgo <alex.rozgo@gmail.com>"]
+
+[dependencies]

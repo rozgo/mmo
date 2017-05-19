@@ -1,0 +1,9 @@
+[package]
+name = "mmo-server"
+version = "0.1.0"
+authors = ["Alex Rozgo <alex.rozgo@gmail.com>"]
+
+[dependencies]
+futures = "*"
+tokio-core = "*"
+# futures-io = "*"
