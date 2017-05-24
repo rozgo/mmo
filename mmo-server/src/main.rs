@@ -11,17 +11,22 @@ use clap::{Arg, App};
 
 use std::{io};
 use std::net::SocketAddr;
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::time::{Instant};
 
 use futures::{Future, Poll};
 use tokio_core::net::UdpSocket;
 use tokio_core::reactor::Core;
 
+struct Client {
+    instant: Instant,
+}
+
 struct Server {
     socket: UdpSocket,
     buf: Vec<u8>,
-    peers: HashSet<SocketAddr>,
-    to_send: Option<(usize, SocketAddr)>,
+    clients: HashMap<SocketAddr, Client>,
+    sender: Option<(usize, SocketAddr)>,
 }
 
 impl Future for Server {
@@ -31,24 +36,28 @@ impl Future for Server {
     fn poll(&mut self) -> Poll<(), io::Error> {
         loop {
 
-            if let Some((size, peer)) = self.to_send {
-                for recv in self.peers.iter().filter(|&&x| x != peer) {
+            let mut expired = Vec::new();
+
+            if let Some((size, peer)) = self.sender {
+                for recv in self.clients.keys().filter(|&&x| x != peer) {
                     try_nb!(self.socket.send_to(&self.buf[..size], recv));
-                    // let amt = try_nb!(self.socket.send_to(&self.buf[..size], recv));
-                    // println!("Echoed {}/{} bytes to {}", amt, size, peer);
+                    if let Some(client) = self.clients.get(recv) {
+                        if client.instant.elapsed().as_secs() > 10 {
+                            expired.push(recv.clone());
+                            println!("Expired: {}", recv);
+                        }
+                    }
                 }
-                self.to_send = None;
+                self.sender = None;
             }
 
+            for peer in expired {
+                self.clients.remove(&peer);
+            }
+            
             let (size, peer) = try_nb!(self.socket.recv_from(&mut self.buf));
-            self.peers.insert(peer);
-            
-            self.to_send = Some((size, peer));
-            
-            // if let Some((size, peer)) = self.to_send {
-            //     //let sparkle_heart = String::from_utf8(self.buf).unwrap();
-            //     // println!("got: {:?} from: {}", self.buf, peer);
-            // }
+            self.clients.insert(peer, Client{instant: Instant::now()});
+            self.sender = Some((size, peer));
         }
     }
 }
@@ -58,7 +67,7 @@ fn main() {
     let matches =
         App::new("mmo-server")
             .version("0.1.0")
-            .about("Simulates a universe!")
+            .about("Simulates a slice of universe!")
             .author("Alex Rozgo")
             .arg(Arg::with_name("addr")
                 .short("a")
@@ -78,8 +87,19 @@ fn main() {
     l.run(Server {
         socket: socket,
         buf: vec![0; 1024],
-        peers: HashSet::new(),
-        to_send: None,
+        clients: HashMap::new(),
+        sender: None,
     }).unwrap();
 }
 
+
+
+
+            // if let Some((size, peer)) = self.to_send {
+            //     //let sparkle_heart = String::from_utf8(self.buf).unwrap();
+            //     // println!("got: {:?} from: {}", self.buf, peer);
+            // }
+
+
+                    // let amt = try_nb!(self.socket.send_to(&self.buf[..size], recv));
+                    // println!("Echoed {}/{} bytes to {}", amt, size, peer);
