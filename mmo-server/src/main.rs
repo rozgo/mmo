@@ -2,6 +2,7 @@
 //!
 //!     nc -4u localhost 8080
 
+#[macro_use]
 extern crate clap;
 extern crate futures;
 #[macro_use]
@@ -12,7 +13,7 @@ use clap::{Arg, App};
 use std::{io};
 use std::net::SocketAddr;
 use std::collections::HashMap;
-use std::time::{Instant};
+use std::time::{Instant, Duration};
 
 use futures::{Future, Poll};
 use tokio_core::net::UdpSocket;
@@ -27,6 +28,7 @@ struct Server {
     buf: Vec<u8>,
     clients: HashMap<SocketAddr, Client>,
     sender: Option<(usize, SocketAddr)>,
+    expiration: Duration,
 }
 
 impl Future for Server {
@@ -42,7 +44,7 @@ impl Future for Server {
                 for recv in self.clients.keys().filter(|&&x| x != peer) {
                     try_nb!(self.socket.send_to(&self.buf[..size], recv));
                     if let Some(client) = self.clients.get(recv) {
-                        if client.instant.elapsed().as_secs() > 10 {
+                        if client.instant.elapsed() > self.expiration {
                             expired.push(recv.clone());
                             println!("Expired: {}", recv);
                         }
@@ -74,10 +76,17 @@ fn main() {
                 .long("address")
                 .help("Host to connect to address:port")
                 .takes_value(true))
+            .arg(Arg::with_name("exp")
+                .short("e")
+                .long("expiration")
+                .help("Connection expiration limit")
+                .takes_value(true))
             .get_matches();
 
     let addr = matches.value_of("addr").unwrap_or("127.0.0.1:8080");
     let addr = addr.parse::<SocketAddr>().unwrap();
+
+    let exp = value_t!(matches, "exp", u64).unwrap_or(10);
 
     let mut l = Core::new().unwrap();
     let handle = l.handle();
@@ -89,6 +98,7 @@ fn main() {
         buf: vec![0; 1024],
         clients: HashMap::new(),
         sender: None,
+        expiration: Duration::from_secs(exp),
     }).unwrap();
 }
 
