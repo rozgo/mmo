@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Alex Rozgo <alex.rozgo@gmail.com>"]
 
 [dependencies]
-clap = "*"
-futures = "*"
-tokio-core = "*"
-# futures-io = "*"
+clap = "2.24"
+futures = "0.1"
+tokio-core = "0.1"
+

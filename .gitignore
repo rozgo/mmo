@@ -1,2 +1,5 @@
 target/
 **/*.rs.bk
+UnrealMMO/
+dump.opus
+Cargo.lock

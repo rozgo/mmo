@@ -15,9 +15,9 @@ use futures::{Future, Poll};
 use tokio_core::net::UdpSocket;
 use tokio_core::reactor::Core;
 
-struct Client {
-    instant: Instant,
-}
+mod client;
+
+use client::Client;
 
 struct Server {
     socket: UdpSocket,
