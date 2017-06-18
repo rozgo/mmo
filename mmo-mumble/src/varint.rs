@@ -1,7 +1,5 @@
 use std::io::{self, Result};
 
-/// let mut rdr = Cursor::new(buf);
-/// let num = rdr.read_varint().unwrap();
 pub trait VarintReader: io::Read {
 
     fn read_varint(&mut self) -> Result<u64> {
@@ -22,7 +20,6 @@ pub trait VarintReader: io::Read {
                     0xF0 => next() << 24 | next() << 16 | next() << 8 | next(),
                     0xF4 => next() << 56 | next() << 48 | next() << 40 | next() << 32 | next() << 24 | next() << 16 | next() << 8 | next(),
                     0xF8 => {
-                        panic!("read_varint recursion");
                         i = decode(i, next);
                         !i
                     },
@@ -30,7 +27,7 @@ pub trait VarintReader: io::Read {
                         i = v & 0x03;
                         !i
                     },
-                    _ => panic!("what"),
+                    _ => panic!("decoding"),
                 }
             }
             else if (v & 0xF0) == 0xE0 {
@@ -50,11 +47,184 @@ pub trait VarintReader: io::Read {
         };
 
         let mut i = 0u64;
-    
         i = decode(i, next);
 
         Ok(i)
     }
 }
 
+
 impl<R: io::Read + ?Sized> VarintReader for R {}
+
+pub trait VarintWriter: io::Write {
+    
+    fn write_varint(&mut self, value: u64) ->  Result<usize> {
+        let mut buf = Vec::<u8>::new();
+        let mut i = value;
+        if (i & 0x8000000000000000 > 0) && (!i < 0x100000000) {
+            // Signed number.
+            i = !i;
+            if i <= 0x3 {
+                // Shortcase for -1 to -4
+                buf.push(0xFC | i as u8);
+                return self.write(&mut buf[..])
+            } else {
+                buf.push(0xF8);
+            }
+        }
+        if i < 0x80 {
+            // Need top bit clear
+            buf.push(i as u8);
+        } else if i < 0x4000 {
+            // Need top two bits clear
+            buf.push(((i >> 8) | 0x80) as u8);
+            buf.push((i & 0xFF) as u8);
+        } else if i < 0x200000 {
+            // Need top three bits clear
+            buf.push(((i >> 16) | 0xC0) as u8);
+            buf.push(((i >> 8) & 0xFF) as u8);
+            buf.push((i & 0xFF) as u8);
+        } else if i < 0x10000000 {
+            // Need top four bits clear
+            buf.push(((i >> 24) | 0xE0) as u8);
+            buf.push(((i >> 16) & 0xFF) as u8);
+            buf.push(((i >> 8) & 0xFF) as u8);
+            buf.push((i & 0xFF) as u8);
+        } else if i < 0x100000000 {
+            // It's a full 32-bit integer.
+            buf.push(0xF0);
+            buf.push(((i >> 24) & 0xFF) as u8);
+            buf.push(((i >> 16) & 0xFF) as u8);
+            buf.push(((i >> 8) & 0xFF) as u8);
+            buf.push((i & 0xFF) as u8);
+        } else {
+            // It's a 64-bit value.
+            buf.push(0xF4);
+            buf.push(((i >> 56) & 0xFF) as u8);
+            buf.push(((i >> 48) & 0xFF) as u8);
+            buf.push(((i >> 40) & 0xFF) as u8);
+            buf.push(((i >> 32) & 0xFF) as u8);
+            buf.push(((i >> 24) & 0xFF) as u8);
+            buf.push(((i >> 16) & 0xFF) as u8);
+            buf.push(((i >> 8) & 0xFF) as u8);
+            buf.push((i & 0xFF) as u8);
+        }
+
+        self.write(&mut buf[..])
+    }
+}
+
+impl<W: io::Write> VarintWriter for W {}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+    use varint::{VarintReader, VarintWriter};
+
+    #[test]
+    fn it_works() {
+
+        let large_uint8  = 0xFF;
+        let large_uint16 = 0xFFFF;
+        let large_uint32 = 0xFFFFFFFF;
+        let large_uint64 = 0xFFFFFFFFFFFFFFFF;
+
+        // let small_int8  = -0x7F;
+        // let small_int16 = -0x7FFF;
+        // let small_int32 = -0x7FFFFFFF;
+        // let small_int64 = -0x7FFFFFFFFFFFFFFF;
+
+        // let really_small_int32 = -0x80000000;
+        // let really_small_int64 = -0x8000000000000000;
+
+        let mut buf = vec![0u8; 20];
+
+        // large_uint8
+        {
+            let mut wtr = Cursor::new(&mut buf[..]);
+            wtr.write_varint(large_uint8).unwrap();
+        }
+        {
+            let mut rdr = Cursor::new(&mut buf[..]);
+            let num = rdr.read_varint().unwrap();
+            assert_eq!(num, large_uint8);
+        }
+
+        // large_uint16
+        {
+            let mut wtr = Cursor::new(&mut buf[..]);
+            wtr.write_varint(large_uint16).unwrap();
+        }
+        {
+            let mut rdr = Cursor::new(&mut buf[..]);
+            let num = rdr.read_varint().unwrap();
+            assert_eq!(num, large_uint16);
+        }
+
+        // large_uint32
+        {
+            let mut wtr = Cursor::new(&mut buf[..]);
+            wtr.write_varint(large_uint32).unwrap();
+        }
+        {
+            let mut rdr = Cursor::new(&mut buf[..]);
+            let num = rdr.read_varint().unwrap();
+            assert_eq!(num, large_uint32);
+        }
+
+        // large_uint64
+        {
+            let mut wtr = Cursor::new(&mut buf[..]);
+            wtr.write_varint(large_uint64).unwrap();
+        }
+        {
+            let mut rdr = Cursor::new(&mut buf[..]);
+            let num = rdr.read_varint().unwrap();
+            assert_eq!(num, large_uint64);
+        }
+
+        // // small_int8
+        // {
+        //     let mut wtr = Cursor::new(&mut buf[..]);
+        //     wtr.write_varint(small_int8 as u64);
+        // }
+        // {
+        //     let mut rdr = Cursor::new(&mut buf[..]);
+        //     let num = rdr.read_varint().unwrap();
+        //     assert_eq!(num, small_int8);
+        // }
+
+        // // small_int16
+        // {
+        //     let mut wtr = Cursor::new(&mut buf[..]);
+        //     wtr.write_varint(small_int16 as u64);
+        // }
+        // {
+        //     let mut rdr = Cursor::new(&mut buf[..]);
+        //     let num = rdr.read_varint().unwrap();
+        //     assert_eq!(num, small_int16);
+        // }
+
+        // // small_int32
+        // {
+        //     let mut wtr = Cursor::new(&mut buf[..]);
+        //     wtr.write_varint(small_int32 as u64);
+        // }
+        // {
+        //     let mut rdr = Cursor::new(&mut buf[..]);
+        //     let num = rdr.read_varint().unwrap();
+        //     assert_eq!(num, small_int32);
+        // }
+
+        // // small_int64
+        // {
+        //     let mut wtr = Cursor::new(&mut buf[..]);
+        //     wtr.write_varint(small_int64 as u64);
+        // }
+        // {
+        //     let mut rdr = Cursor::new(&mut buf[..]);
+        //     let num = rdr.read_varint().unwrap();
+        //     assert_eq!(num, small_int64);
+        // }
+    }
+}
