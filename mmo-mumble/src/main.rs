@@ -8,10 +8,18 @@ extern crate tokio_timer;
 extern crate protobuf;
 extern crate byteorder;
 extern crate opus;
+extern crate chrono;
+extern crate hyper;
+extern crate hyper_tls;
+extern crate rand;
+extern crate pretty_env_logger;
+
+extern crate warheadhateus;
 
 use clap::{Arg, App};extern crate futures;
 
-use std::fs::File;
+use std::fs;
+
 use std::io::{Write, Read, Error, ErrorKind};
 use std::net::SocketAddr;
 use std::path::Path;
@@ -24,7 +32,6 @@ use futures::stream::{Stream};
 use openssl::ssl::{SslContext, SslMethod, SSL_VERIFY_PEER};
 use openssl::x509::X509_FILETYPE_PEM;
 
-use tokio_io::io;
 use tokio_io::AsyncRead;
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::Core;
@@ -34,7 +41,7 @@ use protobuf::Message;
 use protobuf::{CodedOutputStream, CodedInputStream};
 
 use std::io::Cursor;
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
 
 mod mumble;
 mod connector;
@@ -42,6 +49,8 @@ use connector::MumbleConnector;
 
 mod varint;
 use varint::VarintReader;
+
+mod lex;
 
 fn err_str<T>(e : T) -> Error
 where T: std::string::ToString
@@ -69,14 +78,10 @@ fn main() {
     let client = TcpStream::connect(&addr, &handle);
 
     let data = client.and_then(|socket| {
-
         let path = Path::new("mumble.pem");
-
         let mut ctx = SslContext::builder(SslMethod::tls()).unwrap();
         ctx.set_verify_callback(SSL_VERIFY_PEER, |_, _| true);
-
         assert!(ctx.set_certificate_file(&path, X509_FILETYPE_PEM).is_ok());
-
         let ctx = ctx.build();
         let connector = MumbleConnector(ctx);
         connector.connect_async(addr_str, socket).map_err(err_str)
@@ -97,7 +102,7 @@ fn main() {
         assert!(os.flush().is_ok());
         assert!(version.write_to_with_cached_sizes(os).is_ok());
         }
-        io::write_all(stream, buf)
+        tokio_io::io::write_all(stream, buf)
 
     }).and_then(|(stream, _)| { // Authenticate
         let mut auth = mumble::Authenticate::new();
@@ -113,32 +118,87 @@ fn main() {
         assert!(os.flush().is_ok());
         assert!(auth.write_to_with_cached_sizes(os).is_ok());
         }
-        io::write_all(stream, buf)
+        tokio_io::io::write_all(stream, buf)
 
     }).and_then(|(stream, _)| {
-
-        let file = File::create("dump.opus").unwrap();
-        let file = tokio_file_unix::File::new_nb(file).unwrap();
-        let (file_tx, file_rx) = futures::sync::mpsc::unbounded::<Vec<u8>>();
-        let file_writer = file_rx.fold(file, move |mut writer, msg : Vec<u8>| {
-            println!("dumping {:?}", msg.len());
-            writer.write_all(&msg[..])
-            .map(|_| writer)
-            .map_err(|_| ())
-        })
-        .map_err(|_| Error::new(ErrorKind::Other, "dumping to file"));
 
         let (reader, writer) = stream.split();
         let (tx, rx) = futures::sync::mpsc::unbounded::<Vec<u8>>();
         let tx0 = tx.clone();
         let tx1 = tx.clone();
 
-        let timer = Timer::default();
-        let ping =
-        
-        timer.interval(Duration::from_secs(5))
-        .fold(tx0, move |tx, _| {
+        let socket_writer = rx.fold(writer, move |writer, msg : Vec<u8>| {
+            println!("{:?}", msg);
+            tokio_io::io::write_all(writer, msg)
+            .map(|(writer, _)| writer)
+            .map_err(|_| ())
+        })
+        .map_err(|_| Error::new(ErrorKind::Other, "writing to tcp"));
 
+        let lex_client = lex::client(&handle);
+        let (lex_tx, lex_rx) = futures::sync::mpsc::unbounded::<Vec<u8>>();
+        let lex_task = lex_rx.fold((), move |(), msg| {
+            let mut req = lex::request();
+            req.set_body(msg);
+            lex_client.request(req).and_then(|res| {
+                println!("POST: {:?}", res.headers());
+                res.body().for_each(|chunk| {
+                    // file.write_all(&chunk).map_err(From::from)
+                    // std::io::stdout().write_all(&chunk).map_err(From::from)
+                    std::io::stdout().write_all(b"").map_err(From::from)
+                })
+            })
+            .map(|_| ())
+            .map_err(|_| ())
+        })
+        .map_err(|_| Error::new(ErrorKind::Other, "dumping to file"));
+
+        let (file_tx, file_rx) = futures::sync::mpsc::unbounded::<(Vec<u8>, bool)>();
+        let file : Option<_> = None;
+        let file_writer = file_rx.fold(file, move |writer, (msg, done)| {
+            let mut writer = 
+                match writer {
+                    Some (writer) => {
+                        writer
+                    },
+                    None => {
+                        // let date = chrono::Local::now().format("%Y-%m-%d-%H-%M-%S");
+                        // let file_name = format!("dump-{}.opus", date);
+                        // let file = fs::File::create(file_name).unwrap();
+                        // tokio_file_unix::File::new_nb(file).unwrap()
+                        let opus_data = Vec::<u8>::new();
+                        let opus_data = Cursor::new(opus_data);
+                        opus_data
+                    }
+                };
+            println!("dumping {:?}", msg.len());
+            writer.write_all(&msg).unwrap();
+
+            if done {
+                let data = writer.into_inner();
+                {
+                    let date = chrono::Local::now().format("%Y-%m-%d-%H-%M-%S");
+                    let file_name = format!("dump-{}.opus", date);
+                    let mut file = fs::File::create(file_name).unwrap();
+                    file.write_all(&data).unwrap();
+                }
+                let lex_tx = lex_tx.clone();
+                lex_tx.send(data)
+                .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
+                .and_then(|_| ok(None))
+                .boxed()
+                }
+            else {
+                ok(Some(writer))
+                .boxed()
+            }
+            .map_err(|_| ())
+        })
+        .map(|_| ())
+        .map_err(|_| Error::new(ErrorKind::Other, "dumping to file"));
+
+        let timer = Timer::default();
+        let ping = timer.interval(Duration::from_secs(5)).fold(tx0, move |tx, _| {
             let ping = mumble::Ping::new();
             let s = ping.compute_size();
             let mut buf = vec![0u8; (s + 6) as usize];
@@ -149,22 +209,20 @@ fn main() {
             assert!(os.flush().is_ok());
             assert!(ping.write_to_with_cached_sizes(os).is_ok());
             }
-
             println!("PING");
-
             tx.send(buf)
             .map_err(|_| tokio_timer::TimerError::NoCapacity)
         })
         .map_err(|e| Error::new(ErrorKind::Other, e.to_string()));
 
-        let socket_reader = loop_fn((reader, false, tx1, file_tx), |(reader, _/*done*/, tx, file_tx)| {
+        let socket_reader = loop_fn((reader, tx1, file_tx), |(reader, tx, file_tx)| {
             
-            io::read_exact(reader, [0u8; 2])
+            tokio_io::io::read_exact(reader, [0u8; 2])
             .and_then(|(reader, buf)| {
                 let mut rdr = Cursor::new(&buf);
                 let mum_type = rdr.read_u16::<BigEndian>().unwrap();
                 println!("mum_type: {}", mum_type);
-                io::read_exact(reader, [0u8; 4])
+                tokio_io::io::read_exact(reader, [0u8; 4])
                 .and_then(move |(reader, buf)| {
                     ok((reader, buf, mum_type))
                 })
@@ -172,7 +230,7 @@ fn main() {
             .and_then(|(reader, buf, mum_type)| {
                 let mut rdr = Cursor::new(&buf);
                 let mum_length = rdr.read_u32::<BigEndian>().unwrap();
-                io::read_exact(reader, vec![0u8; mum_length as usize])
+                tokio_io::io::read_exact(reader, vec![0u8; mum_length as usize])
                 .and_then(move |(reader, buf)| {
                     ok((reader, buf, mum_type))
                 })
@@ -185,7 +243,7 @@ fn main() {
                         let mut msg = mumble::Version::new();
                         msg.merge_from(&mut inp).unwrap();
                         println!("Version: {:?}", msg);
-                        ok((reader, false, tx, file_tx))
+                        ok((reader, tx, file_tx))
                         .boxed()
                     },
                     1 => { // UDPTunnel
@@ -212,21 +270,21 @@ fn main() {
                                 rdr.read_exact(&mut opus_data[..]).unwrap();
 
                                 let mut sample_pcm = vec![0i16; 500000];
-                                let mut decoder = opus::Decoder::new(48000, opus::Channels::Mono).unwrap();
+                                let mut decoder = opus::Decoder::new(16000, opus::Channels::Mono).unwrap();
                                 let size = decoder.decode(&opus_data[..], &mut sample_pcm[..], false).unwrap();
                                 let mut opus_data = vec![0u8; size * 2];
                                 for s in 0..size {
-                                    (&mut opus_data[s*2..]).write_i16::<BigEndian>(sample_pcm[s]).unwrap();
+                                    (&mut opus_data[s*2..]).write_i16::<LittleEndian>(sample_pcm[s]).unwrap();
                                 }
                                 
                                 let file_tx0 = file_tx.clone();
-                                file_tx.send(opus_data)
+                                file_tx.send((opus_data, opus_done))
                                 .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
-                                .and_then(|_| ok((reader, false, tx, file_tx0)))
+                                .and_then(|_| ok((reader, tx, file_tx0)))
                                 .boxed()
                             },
                             32 => { // Ping
-                                ok((reader, false, tx, file_tx))
+                                ok((reader, tx, file_tx))
                                 .boxed()
                             },
                             _ => {
@@ -239,7 +297,7 @@ fn main() {
                         let mut msg = mumble::ServerSync::new();
                         msg.merge_from(&mut inp).unwrap();
                         println!("ServerSync: {:?}", msg);
-                        ok((reader, false, tx, file_tx))
+                        ok((reader, tx, file_tx))
                         .boxed()
                     },
                     7 => { // ChannelState
@@ -247,7 +305,7 @@ fn main() {
                         let mut msg = mumble::ChannelState::new();
                         msg.merge_from(&mut inp).unwrap();
                         println!("ChannelState: {:?}", msg);
-                        ok((reader, false, tx, file_tx))
+                        ok((reader, tx, file_tx))
                         .boxed()
                     },
                     9 => { // UserState
@@ -255,7 +313,7 @@ fn main() {
                         let mut msg = mumble::UserState::new();
                         msg.merge_from(&mut inp).unwrap();
                         println!("UserState: {:?}", msg);
-                        ok((reader, false, tx, file_tx))
+                        ok((reader, tx, file_tx))
                         .boxed()
                     },
                     11 => { // TextMessage
@@ -263,7 +321,7 @@ fn main() {
                         let mut msg = mumble::TextMessage::new();
                         msg.merge_from(&mut inp).unwrap();
                         println!("TextMessage: {:?}", msg);
-                        ok((reader, false, tx, file_tx))
+                        ok((reader, tx, file_tx))
                         .boxed()
                     },
                     15 => { // CryptSetup
@@ -271,7 +329,7 @@ fn main() {
                         let mut msg = mumble::CryptSetup::new();
                         msg.merge_from(&mut inp).unwrap();
                         println!("CryptSetup: {:?}", msg);
-                        ok((reader, false, tx, file_tx))
+                        ok((reader, tx, file_tx))
                         .boxed()
                     },
                     20 => { // PermissionQuery
@@ -279,7 +337,7 @@ fn main() {
                         let mut msg = mumble::PermissionQuery::new();
                         msg.merge_from(&mut inp).unwrap();
                         println!("PermissionQuery: {:?}", msg);
-                        ok((reader, false, tx, file_tx))
+                        ok((reader, tx, file_tx))
                         .boxed()
                     },
                     21 => { // CodecVersion
@@ -287,7 +345,7 @@ fn main() {
                         let mut msg = mumble::CodecVersion::new();
                         msg.merge_from(&mut inp).unwrap();
                         println!("CodecVersion: {:?}", msg);
-                        ok((reader, false, tx, file_tx))
+                        ok((reader, tx, file_tx))
                         .boxed()
                     },
                     24 => { // ServerConfig
@@ -295,34 +353,26 @@ fn main() {
                         let mut msg = mumble::ServerConfig::new();
                         msg.merge_from(&mut inp).unwrap();
                         println!("ServerConfig: {:?}", msg);
-                        ok((reader, false, tx, file_tx))
+                        ok((reader, tx, file_tx))
                         .boxed()
                     },
                     _ => {
-                        ok((reader, false, tx, file_tx))
+                        ok((reader, tx, file_tx))
                         .boxed()
                     },
                 }
             })
-            .and_then(|(reader, done, tx, file_tx)| {
-                if done {
+            .and_then(|(reader, tx, file_tx)| {
+                if false {
                     Ok(Loop::Break(900))
                 }
                 else {
-                    Ok(Loop::Continue((reader, false, tx, file_tx)))
+                    Ok(Loop::Continue((reader, tx, file_tx)))
                 }
             })
         });
-
-        let socket_writer = rx.fold(writer, move |writer, msg : Vec<u8>| {
-            println!("{:?}", msg);
-            io::write_all(writer, msg)
-            .map(|(writer, _)| writer)
-            .map_err(|_| ())
-        })
-        .map_err(|_| Error::new(ErrorKind::Other, "writing to tcp"));
-
-        Future::join4(ping, socket_reader, socket_writer, file_writer)
+        
+        Future::join5(ping, socket_reader, socket_writer, file_writer, lex_task)
     });
 
     core.run(data).unwrap();
