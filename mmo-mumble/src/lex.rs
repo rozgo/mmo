@@ -3,20 +3,19 @@ use hyper::client::HttpConnector;
 use hyper::header;
 use hyper::mime;
 use hyper_tls::{HttpsConnector};
-use rand;
 use chrono;
 use tokio_core;
 use warheadhateus::{AWSAuth, HttpRequestMethod, Region, Service};
+use config;
 
-pub fn request () -> Request {
+pub fn request (config : &config::Config, user_id : u32) -> Request {
 
-    // TODO: proper provisioning
-    let access_key_id = "access_key_id";
-    let secret_access_key = "secret_access_key";
+    let access_key_id = &config.aws.access_key_id;
+    let secret_access_key = &config.aws.secret_access_key;
 
-    let user_id = format!("{:05}", rand::random::<u16>());
+    let user_id = format!("{:05}", user_id);
     let post = format!("/bot/Lyric/alias/Lyric/user/{}/content", user_id);
-    println!("user_id {}", user_id);
+    trace!("user_id {}", user_id);
     let host = format!("runtime.lex.us-east-1.amazonaws.com");
     let url = format!("https://{}{}", host, post);
     let uri = url.parse().unwrap();
