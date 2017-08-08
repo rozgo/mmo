@@ -42,7 +42,7 @@ impl Future for Server {
                     if let Some(client) = self.clients.get(recv) {
                         if client.instant.elapsed() > self.expiration {
                             expired.push(recv.clone());
-                            println!("Expired: {}", recv);
+                            println!("Expired: {} {}", expired.len(), recv);
                         }
                     }
                 }
@@ -51,9 +51,13 @@ impl Future for Server {
 
             for peer in expired {
                 self.clients.remove(&peer);
+                println!("Remove: {}", peer);
             }
 
             let (size, peer) = try_nb!(self.socket.recv_from(&mut self.buf));
+            if !self.clients.contains_key(&peer) {
+                println!("Connected: {}", peer);
+            }
             self.clients.insert(peer, Client { instant: Instant::now() });
             self.sender = Some((size, peer));
         }
@@ -81,7 +85,7 @@ fn main() {
     let addr = matches.value_of("addr").unwrap_or("127.0.0.1:8080");
     let addr = addr.parse::<SocketAddr>().unwrap();
 
-    let exp = value_t!(matches, "exp", u64).unwrap_or(100);
+    let exp = value_t!(matches, "exp", u64).unwrap_or(5);
 
     let mut l = Core::new().unwrap();
     let handle = l.handle();
