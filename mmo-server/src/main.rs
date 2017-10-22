@@ -35,23 +35,25 @@ impl Future for Server {
         loop {
 
             let mut expired = Vec::new();
-
-            if let Some((size, sndr)) = self.sender {
-                for recv in self.clients.keys().filter(|&&x| x != sndr) {
-                    try_nb!(self.socket.send_to(&self.buf[..size], recv));
-                    if let Some(client) = self.clients.get(recv) {
-                        if client.instant.elapsed() > self.expiration {
-                            expired.push(recv.clone());
-                            println!("Expired: {} {}", expired.len(), recv);
-                        }
+            for recv in self.clients.keys() {
+                if let Some(client) = self.clients.get(recv) {
+                    if client.instant.elapsed() > self.expiration {
+                        expired.push(recv.clone());
+                        println!("Expired: {} {}", expired.len(), recv);
                     }
                 }
-                self.sender = None;
             }
 
             for peer in expired {
                 self.clients.remove(&peer);
                 println!("Remove: {}", peer);
+            }
+
+            if let Some((size, sndr)) = self.sender {
+                for recv in self.clients.keys().filter(|&&x| x != sndr) {
+                    try_nb!(self.socket.send_to(&self.buf[..size], recv));
+                }
+                self.sender = None;
             }
 
             let (size, peer) = try_nb!(self.socket.recv_from(&mut self.buf));
