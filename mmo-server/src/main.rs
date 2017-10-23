@@ -66,13 +66,13 @@ fn main() {
     let expiration = Duration::from_secs(exp);
     let clients = &mut HashMap::<SocketAddr, Client>::new();
 
-    let listen_task = udp_socket_rx.fold((clients, udp_socket_tx), |(clients, tx), (client_socket, msg)| {
+    let listen_task = udp_socket_rx.fold((clients, udp_socket_tx), |(clients, udp_socket_tx), (client_socket, msg)| {
 
         let mut expired = Vec::new();
-        for (socket, client) in clients.iter() {
+        for (client_socket, client) in clients.iter() {
             if client.instant.elapsed() > expiration {
-                expired.push(socket.clone());
-                println!("Expired: {} {}", expired.len(), socket);
+                expired.push(*client_socket);
+                println!("Expired: {}", client_socket);
             }
         }
 
@@ -89,14 +89,14 @@ fn main() {
 
         let client_sockets: Vec<_> = clients.keys()
             .filter(|&&x| x != client_socket)
-            .map(|k| k.clone()).collect();
+            .map(|k| *k).collect();
 
         stream::iter_ok::<_, ()>(client_sockets)
-        .fold(tx, move |tx, client_socket| {
-            tx.send((client_socket.clone(), msg.clone()))
+        .fold(udp_socket_tx, move |udp_socket_tx, client_socket| {
+            udp_socket_tx.send((client_socket, msg.clone()))
             .map_err(|_| ())
         })
-        .map(|a| (clients, a))
+        .map(|udp_socket_tx| (clients, udp_socket_tx))
         .map_err(|_| Error::new(ErrorKind::Other, "broadcasting to clients"))
     });
 
