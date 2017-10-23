@@ -68,6 +68,11 @@ fn main() {
 
     let listen_task = udp_socket_rx.fold((clients, udp_socket_tx), |(clients, udp_socket_tx), (client_socket, msg)| {
 
+        if !clients.contains_key(&client_socket) {
+            println!("Connected: {}", client_socket);
+        }
+        clients.insert(client_socket, Client { instant: Instant::now() });
+
         let mut expired = Vec::new();
         for (client_socket, client) in clients.iter() {
             if client.instant.elapsed() > expiration {
@@ -75,22 +80,14 @@ fn main() {
                 println!("Expired: {}", client_socket);
             }
         }
-
         for client_socket in expired {
             clients.remove(&client_socket);
             println!("Removed: {} Online: {}", client_socket, clients.len());
         }
 
-        if !clients.contains_key(&client_socket) {
-            println!("Connected: {}", client_socket);
-        }
-
-        clients.insert(client_socket, Client { instant: Instant::now() });
-
         let client_sockets: Vec<_> = clients.keys()
             .filter(|&&x| x != client_socket)
             .map(|k| *k).collect();
-
         stream::iter_ok::<_, ()>(client_sockets)
         .fold(udp_socket_tx, move |udp_socket_tx, client_socket| {
             udp_socket_tx.send((client_socket, msg.clone()))
