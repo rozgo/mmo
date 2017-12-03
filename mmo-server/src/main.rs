@@ -2,6 +2,7 @@
 extern crate clap;
 extern crate futures;
 extern crate tokio_core;
+extern crate byteorder;
 
 use clap::{Arg, App};
 
@@ -14,6 +15,8 @@ use std::time::{Instant, Duration};
 use futures::{Future, stream, Stream, Sink};
 use tokio_core::net::{UdpSocket, UdpCodec};
 use tokio_core::reactor::Core;
+
+use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
 
 pub struct LineCodec;
 
@@ -68,8 +71,14 @@ fn main() {
 
     let listen_task = udp_socket_rx.fold((clients, udp_socket_tx), |(clients, udp_socket_tx), (client_socket, msg)| {
 
+        if msg[0] == 0 {
+            let mut rdr = std::io::Cursor::new(&msg[1..]);
+            let uuid = rdr.read_u32::<LittleEndian>().unwrap();
+            println!("Client: {} UUID: {}", client_socket, uuid);
+        }
+
         if !clients.contains_key(&client_socket) {
-            println!("Connected: {}", client_socket);
+            println!("Connected: {} Online: {}", client_socket, clients.len() + 1);
         }
         clients.insert(client_socket, Client { instant: Instant::now() });
 
@@ -77,12 +86,11 @@ fn main() {
         for (client_socket, client) in clients.iter() {
             if client.instant.elapsed() > expiration {
                 expired.push(*client_socket);
-                println!("Expired: {}", client_socket);
             }
         }
         for client_socket in expired {
             clients.remove(&client_socket);
-            println!("Removed: {} Online: {}", client_socket, clients.len());
+            println!("Expired: {} Online: {}", client_socket, clients.len());
         }
 
         let client_sockets: Vec<_> = clients.keys()

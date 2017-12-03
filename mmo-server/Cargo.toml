@@ -7,4 +7,4 @@ authors = ["Alex Rozgo <alex.rozgo@gmail.com>"]
 clap = "2.24"
 futures = "0.1"
 tokio-core = "0.1"
-
+byteorder = "1.0.0"
